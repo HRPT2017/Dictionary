@@ -15,6 +15,7 @@ import {
   Modal,
   ModalHeader,
   ModalBody,
+  Toast,
 } from "flowbite-react";
 import supabase from "../utils/supabase";
 import { v4 as uuid } from "uuid";
@@ -24,6 +25,7 @@ import { FaRegCircleXmark } from "react-icons/fa6";
 import { TbPlaylistAdd, TbTablePlus } from "react-icons/tb";
 import { FaRegSave } from "react-icons/fa";
 import { saveFile, readFile } from "../utils/fileSystem";
+import { createRoot } from "react-dom/client";
 
 type Data = {
   id: string;
@@ -47,7 +49,7 @@ export default function Language(page: string) {
   const startIndex = (currentPage - 1) * entriesPerPage;
   const [search, setSearch] = useState("");
   const filtered = rows.filter((item) =>
-    JSON.stringify(item).toLowerCase().includes(search.toLowerCase())
+    JSON.stringify(item).toLowerCase().includes(search.toLowerCase()),
   );
   const currentRows = filtered.slice(startIndex, startIndex + entriesPerPage);
   const [editing, setEditing] = useState(false);
@@ -77,7 +79,7 @@ export default function Language(page: string) {
     if (value.length > 0) {
       try {
         const response = await axios.get(
-          `https://inputtools.google.com/request?text=${value}&itc=ja-t-ja-hira-i0-und&num=19&cp=0&cs=1&ie=utf-8&oe=utf-8&app=jsapi`
+          `https://inputtools.google.com/request?text=${value}&itc=ja-t-ja-hira-i0-und&num=19&cp=0&cs=1&ie=utf-8&oe=utf-8&app=jsapi`,
         );
         const suggestionsData = response.data[1][0][1] as string[];
         setSuggestions(suggestionsData);
@@ -98,14 +100,14 @@ export default function Language(page: string) {
       case "ArrowDown":
         e.preventDefault();
         setSelectedIndex((prev) =>
-          prev < suggestions.length - 1 ? prev + 1 : 0
+          prev < suggestions.length - 1 ? prev + 1 : 0,
         );
         break;
 
       case "ArrowUp":
         e.preventDefault();
         setSelectedIndex((prev) =>
-          prev > 0 ? prev - 1 : suggestions.length - 1
+          prev > 0 ? prev - 1 : suggestions.length - 1,
         );
         break;
 
@@ -122,6 +124,7 @@ export default function Language(page: string) {
         break;
     }
   };
+
   useEffect(() => {
     if (selectedIndex >= 0 && listRef.current[selectedIndex]) {
       listRef.current[selectedIndex].scrollIntoView({
@@ -145,7 +148,7 @@ export default function Language(page: string) {
     if (page === "vocab") {
       try {
         const response = await axios.get(
-          `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t&q=${kanji}`
+          `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=en&dt=t&q=${kanji}`,
         );
         const suggestionsData = response.data[0][0][0] as string;
         setMeaning(suggestionsData);
@@ -199,12 +202,31 @@ export default function Language(page: string) {
   };
 
   const addRow = async () => {
-    if (!input || !meaning) return;
-    rows.push({ id: uuid(), kanji: input, reading, meaning });
-    setInput("");
-    setReading([{ kana: "", romaji: "" }]);
-    setMeaning("");
-    await save(rows);
+    const checks = [
+      { value: input, message: "Missing kanji" },
+      { value: meaning, message: "Missing meaning" },
+      { value: reading?.[0]?.kana, message: "Missing kana" },
+      { value: reading?.[0]?.romaji, message: "Missing romaji" },
+    ];
+
+    for (const check of checks) {
+      if (!check.value) {
+        toast(check.message);
+        return;
+      }
+    }
+
+    const exists = rows.some((row) => row.kanji === input);
+    if (exists) {
+      toast("This entry already exists!");
+      return;
+    } else {
+      rows.push({ id: uuid(), kanji: input, reading, meaning });
+      setInput("");
+      setReading([{ kana: "", romaji: "" }]);
+      setMeaning("");
+      await save(rows);
+    }
   };
 
   const deleteRow = async (id: string) => {
@@ -228,52 +250,52 @@ export default function Language(page: string) {
         new Blob([JSON.stringify(updatedRows)], {
           type: "application/json",
         }),
-        { upsert: true }
+        { upsert: true },
       );
     } catch (err) {
       console.error(" Error saving to supabase:", err);
     }
   };
 
+  const loadLocaly = async () => {
+    try {
+      const result = await readFile(filename);
+      let text: string | undefined;
+
+      if (result instanceof Blob) {
+        text = await result.text();
+      } else {
+        text = result;
+      }
+
+      if (text) {
+        setRows(JSON.parse(text));
+      } else {
+        console.warn("File is empty");
+      }
+    } catch (e) {
+      console.error("Error reading or parsing file:", e);
+    }
+
+    const result = await window.electronAPI.loadFile(filename);
+    setRows(JSON.parse(result.data ?? ""));
+  };
+
   const load = async () => {
-    if (isOnline === false) {
-      try {
-        const result = await readFile(filename);
-        let text: string | undefined;
-
-        if (result instanceof Blob) {
-          text = await result.text();
-        } else {
-          text = result;
-        }
-
-        if (text) {
-          setRows(JSON.parse(text));
-        } else {
-          console.warn("File is empty");
-        }
-      } catch (e) {
-        console.error("Error reading or parsing file:", e);
+    try {
+      const { data, error } = await supabase.storage
+        .from("language")
+        .download(filename);
+      if (error) {
+        loadLocaly();
+        return;
       }
-
-      const result = await window.electronAPI.loadFile(filename);
-      setRows(JSON.parse(result.data ?? ""));
-    } else {
-      try {
-        const { data, error } = await supabase.storage
-          .from("language")
-          .download(filename);
-        if (error) {
-          console.error(" Error downloading from supabase:", error);
-          return;
-        }
-        const text = await data.text();
-        const json = JSON.parse(text);
-        setRows(json);
-        await save(json);
-      } catch (err) {
-        console.error(" Error loading from supabase:", err);
-      }
+      const text = await data.text();
+      const json = JSON.parse(text);
+      setRows(json);
+      await save(json);
+    } catch (err) {
+      console.error(" Error loading from supabase:", err);
     }
   };
 
@@ -384,8 +406,9 @@ export default function Language(page: string) {
           </Button>
         </div>
       </div>
+      {/*Table*/}
       <div className="overflow-x-auto">
-        <Table striped>
+        <Table striped className="w-full">
           <TableHead>
             <TableRow>
               <TableHeadCell colSpan={2}>
@@ -410,10 +433,10 @@ export default function Language(page: string) {
           </TableHead>
           <TableBody>
             {currentRows?.map((row, i) => (
-              <TableRow key={i} className="whitespace-nowrap">
-                <TableCell>{row.kanji}</TableCell>
-                <TableCell>{row.meaning}</TableCell>
-                <TableCell>
+              <TableRow key={i}>
+                <TableCell className="w-1/6">{row.kanji}</TableCell>
+                <TableCell className="w-1/3">{row.meaning}</TableCell>
+                <TableCell className="w-full">
                   {row.reading.map((r) => `${r.kana} = ${r.romaji}`).join("; ")}
                 </TableCell>
                 <TableCell className="flex flex-row">
@@ -568,4 +591,26 @@ export default function Language(page: string) {
       )}
     </div>
   );
+}
+
+function toast(message: string, duration = 2000) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+
+  const root = createRoot(container);
+
+  const ToastComponent = () => (
+    <div className="fixed bottom-5 right-5 z-50">
+      <Toast>
+        <div className="text-md font-bold text-red-700">{message}</div>
+      </Toast>
+    </div>
+  );
+
+  root.render(<ToastComponent />);
+
+  setTimeout(() => {
+    root.unmount();
+    container.remove();
+  }, duration);
 }
